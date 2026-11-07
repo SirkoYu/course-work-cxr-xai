@@ -25,6 +25,7 @@ import argparse
 import re
 import shutil
 import sys
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
@@ -72,14 +73,16 @@ def as_str(x) -> str:
     return x.decode("utf-8", errors="replace") if isinstance(x, bytes) else str(x)
 
 
-def load_npz(path: Path, allow_pickle: bool):
+def load_npz_meta(path: Path, allow_pickle: bool):
+    """Читає лише невеликі масиви (назви, мітки). Масив зображень не завантажується в пам'ять
+    цілком (у float64 він може займати десятки ГБ) - його читає NpyStream частинами."""
     try:
         with np.load(path, allow_pickle=allow_pickle) as z:
             missing = REQUIRED_KEYS - set(z.files)
             if missing:
                 sys.exit(f"[ПОМИЛКА] У {path.name} немає ключів {missing}; є лише {z.files}")
             print(f"  читання {path.name} ...")
-            return z["image"], z["image_name"], z["image_label"]
+            return z["image_name"], z["image_label"]
     except ValueError as e:
         if "allow_pickle" in str(e):
             sys.exit(f"[ПОМИЛКА] {path.name} містить об'єкти Python (pickle). Завантаження pickle з "
@@ -87,7 +90,49 @@ def load_npz(path: Path, allow_pickle: bool):
         raise
 
 
-def decide_scaling(images: np.ndarray) -> tuple[str, float]:
+class NpyStream:
+    """Послідовне читання масиву з NPZ (стиснутого чи ні) блоками по першій осі."""
+
+    def __init__(self, path: Path, key: str = "image"):
+        self.path, self.member = path, f"{key}.npy"
+        with zipfile.ZipFile(path) as zf, zf.open(self.member) as f:
+            self.shape, self.dtype = self._read_header(f)
+        self.item_shape = self.shape[1:]
+        self.item_bytes = int(np.prod(self.item_shape, dtype=np.int64)) * self.dtype.itemsize
+
+    def __len__(self) -> int:
+        return self.shape[0]
+
+    def _read_header(self, f):
+        version = np.lib.format.read_magic(f)
+        if version == (1, 0):
+            shape, fortran, dtype = np.lib.format.read_array_header_1_0(f)
+        elif version == (2, 0):
+            shape, fortran, dtype = np.lib.format.read_array_header_2_0(f)
+        else:
+            sys.exit(f"[ПОМИЛКА] {self.path.name}: непідтримувана версія формату .npy {version}")
+        if fortran or dtype.hasobject or len(shape) < 2:
+            sys.exit(f"[ПОМИЛКА] {self.path.name}: масив '{self.member}' має непідтримуваний формат "
+                     f"(shape={shape}, dtype={dtype}, fortran_order={fortran})")
+        return tuple(shape), dtype
+
+    def chunks(self, size: int):
+        """Повертає (індекс першого зображення, масив блоку) до size зображень за раз."""
+        with zipfile.ZipFile(self.path) as zf, zf.open(self.member) as f:
+            self._read_header(f)
+            for start in range(0, len(self), size):
+                k = min(size, len(self) - start)
+                need = k * self.item_bytes
+                buf = bytearray()
+                while len(buf) < need:
+                    part = f.read(need - len(buf))
+                    if not part:
+                        sys.exit(f"[ПОМИЛКА] {self.path.name}: файл обрізаний або пошкоджений")
+                    buf += part
+                yield start, np.frombuffer(buf, dtype=self.dtype).reshape((k, *self.item_shape))
+
+
+def decide_scaling(images: NpyStream, chunk: int) -> tuple[str, float, float]:
     """
     Визначає ОДНЕ правило приведення пікселів до uint8 для всього масиву
     (однакове для всіх зображень, щоб не спотворювати відносну яскравість):
@@ -95,18 +140,21 @@ def decide_scaling(images: np.ndarray) -> tuple[str, float]:
       float з максимумом <= 1 -> x * 255;
       інші типи з максимумом <= 255 -> округлення;
       інакше                  -> x * 255 / глобальний максимум.
+    Глобальний максимум рахується точно, окремим проходом по файлу блоками.
+    Повертає (правило, множник, глобальний максимум).
     """
     if images.dtype == np.uint8:
-        return "none", 1.0
-    rng = np.random.default_rng(0)
-    idx = rng.choice(len(images), size=min(500, len(images)), replace=False)
-    sample_max = float(np.max(images[np.sort(idx)]))
-    global_max = float(np.max(images)) if images.size < 5e8 else sample_max
+        return "none", 1.0, float("nan")
+    global_max = -np.inf
+    with tqdm(total=len(images), desc="Пошук максимуму", unit="зобр.") as bar:
+        for _, block in images.chunks(chunk):
+            global_max = max(global_max, float(np.max(block)))
+            bar.update(len(block))
     if np.issubdtype(images.dtype, np.floating) and global_max <= 1.0 + 1e-6:
-        return "x255", 255.0
+        return "x255", 255.0, global_max
     if global_max <= 255.0:
-        return "round", 1.0
-    return "scale_by_max", 255.0 / global_max
+        return "round", 1.0, global_max
+    return "scale_by_max", 255.0 / global_max, global_max
 
 
 def to_uint8(img: np.ndarray, rule: str, factor: float) -> np.ndarray:
@@ -124,12 +172,12 @@ def to_uint8(img: np.ndarray, rule: str, factor: float) -> np.ndarray:
     return a
 
 
-def save_image(i: int, *, images, names, labels, split: str, npz_name: str, rule: str, factor: float,
-               out: Path) -> dict:
+def save_image(i: int, img: np.ndarray, *, names, labels, split: str, npz_name: str, rule: str,
+               factor: float, out: Path) -> dict:
     name = as_str(names[i])
     cls = constants.NPZ_LABELS[int(labels[i])]
     rel = Path(split) / class_folder(cls) / f"{split}_{i:05d}__{safe_name(name)}.png"
-    Image.fromarray(to_uint8(images[i], rule, factor)).save(out / rel, compress_level=3)
+    Image.fromarray(to_uint8(img, rule, factor)).save(out / rel, compress_level=3)
     return {"split": split, "npz_file": npz_name, "index": i, "original_name": name,
             "name_prefix": name_prefix(name), "label_int": int(labels[i]), "label": cls,
             "file": rel.as_posix()}
@@ -141,7 +189,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--overwrite", action="store_true",
                         help="перезаписати раніше розпаковані цим скриптом файли")
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--chunk", type=int, default=128,
+                        help="скільки зображень тримати в пам'яті одночасно (менше - менше RAM)")
     args = parser.parse_args(argv)
+    if args.chunk < 1:
+        parser.error("--chunk має бути >= 1")
 
     npz_dir, out = settings.npz_dir, settings.data_root
     files = sorted(npz_dir.glob("*.npz"))
@@ -165,7 +217,8 @@ def main(argv: list[str] | None = None) -> None:
     rows, info = [], []
     for path in files:
         split = split_of(path)
-        images, names, labels = load_npz(path, args.allow_pickle)
+        names, labels = load_npz_meta(path, args.allow_pickle)
+        images = NpyStream(path)
         labels = np.asarray(labels).astype(int).reshape(-1)
         if not (len(images) == len(names) == len(labels)):
             sys.exit(f"[ПОМИЛКА] {path.name}: різна кількість зображень ({len(images)}), "
@@ -173,20 +226,26 @@ def main(argv: list[str] | None = None) -> None:
         unknown = sorted(set(labels.tolist()) - set(constants.NPZ_LABELS))
         if unknown:
             sys.exit(f"[ПОМИЛКА] {path.name}: невідомі мітки {unknown}")
-        rule, factor = decide_scaling(images)
-        info.append({"file": path.name, "split": split, "n": len(images), "shape": tuple(images.shape),
-                     "dtype": str(images.dtype), "min": float(np.min(images[:200])),
-                     "max": float(np.max(images[:200])), "scaling": rule})
+        _, head = next(images.chunks(min(200, len(images))))
+        head_min, head_max = float(np.min(head)), float(np.max(head))
+        del head
+        rule, factor, global_max = decide_scaling(images, args.chunk)
+        info.append({"file": path.name, "split": split, "n": len(images), "shape": images.shape,
+                     "dtype": str(images.dtype), "min": head_min, "max": head_max,
+                     "global_max": global_max, "scaling": rule})
         print(f"  {path.name}: {images.shape}, {images.dtype}, правило перетворення: {rule}")
 
         for lbl in constants.NPZ_LABELS.values():
             (out / split / class_folder(lbl)).mkdir(parents=True, exist_ok=True)
 
-        save = partial(save_image, images=images, names=names, labels=labels, split=split,
+        save = partial(save_image, names=names, labels=labels, split=split,
                        npz_name=path.name, rule=rule, factor=factor, out=out)
-        with ThreadPoolExecutor(max_workers=args.workers) as ex:
-            rows += list(tqdm(ex.map(save, range(len(images))), total=len(images),
-                              desc=f"Запис PNG ({split})", unit="зобр."))
+        with ThreadPoolExecutor(max_workers=args.workers) as ex, \
+                tqdm(total=len(images), desc=f"Запис PNG ({split})", unit="зобр.") as bar:
+            for start, block in images.chunks(args.chunk):
+                idx = range(start, start + len(block))
+                rows += list(ex.map(save, idx, block))
+                bar.update(len(block))
         del images, save
 
     df = pd.DataFrame(rows)
