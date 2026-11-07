@@ -27,6 +27,19 @@ def test_npz_helpers(tmp_path):
     assert m.to_uint8(rgb, "none", 1.0).shape == (8, 8)
 
 
+def test_load_npz_meta_flattens_column_arrays(tmp_path):
+    """У датасеті image_name та image_label мають форму (n, 1)."""
+    path = tmp_path / "x.npz"
+    np.savez(path, image=np.zeros((2, 4, 4)), image_name=np.array([["COVID-1.png"], ["COVID-2.png"]]),
+             image_label=np.array([[0.0], [3.0]]))
+    names, labels = extract_npz.load_npz_meta(path, allow_pickle=False)
+    assert names.shape == (2,) and labels.shape == (2,)
+    name = extract_npz.as_str(names[0])
+    assert name == "COVID-1.png"
+    assert extract_npz.name_prefix(name) == "COVID"
+    assert extract_npz.safe_name(name) == "COVID-1"
+
+
 @pytest.mark.parametrize("saver", [np.savez, np.savez_compressed])
 def test_npy_stream_matches_full_load(tmp_path, saver):
     imgs = np.random.default_rng(1).random((37, 6, 5, 3)) * 1000

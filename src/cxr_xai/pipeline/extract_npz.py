@@ -82,7 +82,8 @@ def load_npz_meta(path: Path, allow_pickle: bool):
             if missing:
                 sys.exit(f"[ПОМИЛКА] У {path.name} немає ключів {missing}; є лише {z.files}")
             print(f"  читання {path.name} ...")
-            return z["image_name"], z["image_label"]
+            # У датасеті назви й мітки мають форму (n, 1); без reshape назва стає "['COVID-1.png']"
+            return np.asarray(z["image_name"]).reshape(-1), np.asarray(z["image_label"]).reshape(-1)
     except ValueError as e:
         if "allow_pickle" in str(e):
             sys.exit(f"[ПОМИЛКА] {path.name} містить об'єкти Python (pickle). Завантаження pickle з "
@@ -219,7 +220,7 @@ def main(argv: list[str] | None = None) -> None:
         split = split_of(path)
         names, labels = load_npz_meta(path, args.allow_pickle)
         images = NpyStream(path)
-        labels = np.asarray(labels).astype(int).reshape(-1)
+        labels = labels.astype(int)
         if not (len(images) == len(names) == len(labels)):
             sys.exit(f"[ПОМИЛКА] {path.name}: різна кількість зображень ({len(images)}), "
                      f"назв ({len(names)}) і міток ({len(labels)})")
