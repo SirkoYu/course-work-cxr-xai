@@ -37,12 +37,6 @@ def test_relative_paths_resolve_from_project_root():
     assert s.data_root == (PROJECT_ROOT / "some/dir").resolve()
 
 
-def test_derived_paths_follow_output_dir(tmp_path):
-    s = make_settings(output_dir=tmp_path)
-    assert s.final_model == tmp_path / "models" / "final.keras"
-    assert s.split_csv == tmp_path / "data" / "split.csv"
-
-
 def test_env_file_is_read_and_environment_wins(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text("CXR_IMG_SIZE=224\nCXR_BATCH_SIZE=8\n", encoding="utf-8")
@@ -58,6 +52,12 @@ def test_complex_values_are_parsed_from_env(monkeypatch):
     s = make_settings()
     assert s.split_ratios["train"] == 0.8
     assert s.t_grid == (0.5, 0.9, 0.05)
+
+
+def test_empty_value_in_env_file_means_not_set(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("CXR_RUN=\n", encoding="utf-8")
+    assert Settings(_env_file=env_file).run is None
 
 
 def test_unknown_variable_in_env_file_is_rejected(tmp_path):
@@ -76,6 +76,8 @@ def test_unknown_variable_in_env_file_is_rejected(tmp_path):
     {"threshold_criterion": "unknown"},
     {"img_size": 32},
     {"dropout": 1.0},
+    {"run": "../outside"},
+    {"run": "a/b"},
 ])
 def test_invalid_values_are_rejected(kwargs):
     with pytest.raises(ValidationError):

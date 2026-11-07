@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from cxr_xai import runtime
+from cxr_xai import results, runtime
 from cxr_xai.data import loading
 from cxr_xai.modeling import gradcam
 from cxr_xai.settings import settings
@@ -64,14 +64,15 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     runtime.configure_tensorflow()
 
-    runtime.ensure_dirs()
-    pred_path = settings.data_dir / f"predictions_final_{args.split}.csv"
+    run = results.require_run()
+    pred_dir = run.validation_dir if args.split == "val" else run.test_dir
+    pred_path = pred_dir / f"predictions_final_{args.split}.csv"
     if not pred_path.exists():
         script = "cxr-xai evaluate" if args.split == "val" else "cxr-xai report"
         sys.exit(f"[ПОМИЛКА] Немає {pred_path.name} - спочатку виконайте {script}")
     pred = pd.read_csv(pred_path)
     data_root = settings.data_root
-    model = keras.models.load_model(settings.final_model, compile=False)
+    model = keras.models.load_model(run.final_model, compile=False)
     size = int(model.input_shape[1])          # розмір входу, з яким навчено модель
 
     # --- 1. Пари помилок ---
@@ -79,7 +80,7 @@ def main(argv: list[str] | None = None) -> None:
     pairs = (errors.groupby(["label", "pred_label"]).size().rename("n").reset_index()
              .sort_values("n", ascending=False))
     pairs["share_of_errors"] = (pairs["n"] / max(len(errors), 1)).round(4)
-    pairs.to_csv(settings.reports_dir / f"error_pairs_{args.split}.csv", index=False)
+    pairs.to_csv(run.gradcam_dir / f"error_pairs_{args.split}.csv", index=False)
     print(f"Помилок: {len(errors)} з {len(pred)}")
     print(pairs.head(10).to_string(index=False))
 
@@ -89,26 +90,26 @@ def main(argv: list[str] | None = None) -> None:
     cor_sel = (correct.sort_values("p_max", ascending=False)
                .groupby("label", group_keys=False).head(args.n_correct))
 
-    def run(row):
+    def explain(row):
         img = load_display_image(data_root / row["path"], size)
         cam, _, _ = gradcam.compute_gradcam(model, img, int(row["pred_idx"]))
         ov = gradcam.overlay(img, cam, settings.gradcam_alpha)
         return img, cam, ov
 
-    out_dir = settings.figures_dir / f"gradcam_{args.split}"
+    out_dir = run.gradcam_dir / f"images_{args.split}"
     out_dir.mkdir(parents=True, exist_ok=True)
     err_items, cor_items, stats = [], [], []
     for kind, sel, items in (("error", err_sel, err_items), ("correct", cor_sel, cor_items)):
         for k, (_, row) in enumerate(sel.iterrows(), start=1):
-            img, cam, ov = run(row)
+            img, cam, ov = explain(row)
             caption = f"справжній: {row['label']}\nпрогноз: {row['pred_label']} ({row['p_max']:.2f})"
             items.append((img, ov, caption))
             name = f"{kind}_{k:02d}_{row['label']}_as_{row['pred_label']}.png"
             plt.imsave(out_dir / name.replace(" ", "_"), ov)
 
-    grid_figure(err_items, settings.figures_dir / f"gradcam_errors_{args.split}.png",
+    grid_figure(err_items, run.gradcam_dir / f"gradcam_errors_{args.split}.png",
                 "Grad-CAM: найупевненіші хибні класифікації (верх - знімок, низ - теплова карта)")
-    grid_figure(cor_items, settings.figures_dir / f"gradcam_correct_{args.split}.png",
+    grid_figure(cor_items, run.gradcam_dir / f"gradcam_correct_{args.split}.png",
                 "Grad-CAM: приклади правильних класифікацій")
 
     # --- 3. Евристика зміщення уваги до країв ---
@@ -116,14 +117,14 @@ def main(argv: list[str] | None = None) -> None:
     cor_sample = correct.iloc[rng.permutation(len(correct))[:settings.gradcam_stats_max_correct]]
     for kind, sel in (("error", errors), ("correct", cor_sample)):
         for _, row in sel.iterrows():
-            _, cam, _ = run(row)
+            _, cam, _ = explain(row)
             stats.append({"kind": kind, "label": row["label"], "pred_label": row["pred_label"],
                           "p_max": row["p_max"],
                           "border_fraction": gradcam.border_activation_fraction(cam, settings.border_fraction)})
     st = pd.DataFrame(stats)
-    st.to_csv(settings.data_dir / f"gradcam_border_{args.split}.csv", index=False)
+    st.to_csv(run.gradcam_dir / f"gradcam_border_{args.split}.csv", index=False)
     summary = st.groupby(["kind", "label"])["border_fraction"].agg(["count", "mean", "median"]).round(3)
-    summary.to_csv(settings.reports_dir / f"gradcam_border_summary_{args.split}.csv")
+    summary.to_csv(run.gradcam_dir / f"gradcam_border_summary_{args.split}.csv")
     overall = st.groupby("kind")["border_fraction"].agg(["count", "mean", "median"]).round(3)
 
     expected = 1 - (1 - 2 * settings.border_fraction) ** 2
@@ -146,7 +147,7 @@ def main(argv: list[str] | None = None) -> None:
         "спирається на ділянки біля країв (написи, маркери, рамки), а не на легеневі поля.",
         "Це евристика; висновки слід підкріпити візуальним переглядом рисунків.",
     ])
-    (settings.reports_dir / f"gradcam_report_{args.split}.txt").write_text(report, encoding="utf-8")
+    (run.gradcam_dir / f"gradcam_report_{args.split}.txt").write_text(report, encoding="utf-8")
     print("\n" + report)
 
 

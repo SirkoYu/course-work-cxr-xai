@@ -34,7 +34,7 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 
-from cxr_xai import constants, runtime
+from cxr_xai import constants, results, runtime
 from cxr_xai.settings import settings
 
 REQUIRED_KEYS = {"image", "image_name", "image_label"}
@@ -159,7 +159,8 @@ def main(argv: list[str] | None = None) -> None:
             shutil.rmtree(out / str(split), ignore_errors=True)
         index_csv.unlink()
     out.mkdir(parents=True, exist_ok=True)
-    runtime.ensure_dirs()
+    ds = results.dataset()
+    ds.prepare()
 
     rows, info = [], []
     for path in files:
@@ -190,7 +191,7 @@ def main(argv: list[str] | None = None) -> None:
 
     df = pd.DataFrame(rows)
     df.to_csv(index_csv, index=False)
-    df.to_csv(settings.data_dir / "npz_index.csv", index=False)
+    df.to_csv(ds.extract_dir / "npz_index.csv", index=False)
 
     # --- Звіт ---
     counts = df.pivot_table(index="label", columns="split", values="file", aggfunc="count", fill_value=0)
@@ -198,11 +199,11 @@ def main(argv: list[str] | None = None) -> None:
     counts["Разом"] = counts.sum(axis=1)
     counts["За README"] = [constants.README_CLASS_COUNTS.get(c, 0) for c in counts.index]
     counts.loc["Разом"] = counts.sum()
-    counts.to_csv(settings.reports_dir / "npz_counts.csv")
+    counts.to_csv(ds.extract_dir / "npz_counts.csv")
 
     prefixes = pd.crosstab(df["name_prefix"], df["label"]).reindex(columns=constants.CLASS_NAMES, fill_value=0)
     prefixes = prefixes.loc[prefixes.sum(axis=1).sort_values(ascending=False).index]
-    prefixes.to_csv(settings.reports_dir / "name_prefixes_by_class.csv")
+    prefixes.to_csv(ds.extract_dir / "name_prefixes_by_class.csv")
 
     dup_names = df[df.duplicated("original_name", keep=False)]
     report = "\n".join([
@@ -223,7 +224,7 @@ def main(argv: list[str] | None = None) -> None:
         "Префікси назв файлів за класами (ознака джерела зображень), топ-25:",
         prefixes.head(25).to_string(),
     ])
-    (settings.reports_dir / "extract_report.txt").write_text(report, encoding="utf-8")
+    (ds.extract_dir / "extract_report.txt").write_text(report, encoding="utf-8")
     print("\n" + report)
     print("\nДалі: cxr-xai check")
 

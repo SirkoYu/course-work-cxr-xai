@@ -32,20 +32,23 @@ class Settings(BaseSettings):
         extra="forbid",          # помилка в назві змінної CXR_* у .env не лишиться непоміченою
         frozen=True,
         validate_default=True,
+        env_ignore_empty=True,   # порожнє значення у .env означає «не задано»
     )
 
     # --- Шляхи (відносні шляхи рахуються від кореня проєкту) ---
     npz_dir: Path = Path("dataverse_files")     # оригінальні NPZ-файли датасету
     data_root: Path = Path("dataset")           # розпаковані PNG-зображення
     output_dir: Path = Path("outputs")          # усі результати
-    kb_path: Path = Path("knowledge_base.json")
+    kb_path: Path = Path("knowledge_base.json")  # шаблон БЗ; cxr-xai tune його не змінює
+    # Назва запуску навчання. Не задано: train створює нову назву, інші команди беруть останній запуск.
+    run: str | None = Field(None, pattern=r"^\w[\w.-]*$")
 
     # --- Перевірка файлів ---
     min_image_side: int = Field(64, gt=0)       # зображення з меншою стороною непридатні
 
     # --- Виявлення дублікатів (виконується ДО поділу на вибірки) ---
     # Майже-дублікати: відстань Геммінга між 64-бітними pHash <= порога. Рентгенограми схожі
-    # між собою, тому поріг має бути малим; перевірте figures/near_duplicate_pairs.png.
+    # між собою, тому поріг має бути малим; перевірте dataset/dedup/near_duplicate_pairs.png.
     phash_threshold: int = Field(4, ge=0, le=64)
     # keep_one - з групи дублікатів лишається одне зображення;
     # keep_all - лишаються всі, але група цілком потрапляє в одну вибірку.
@@ -133,59 +136,6 @@ class Settings(BaseSettings):
         if not (start < stop and step > 0):
             raise ValueError("сітка задається як [від, до, крок], де від < до і крок > 0")
         return value
-
-    # --- Похідні шляхи: визначаються структурою каталогу результатів, а не конфігурацією ---
-    @property
-    def data_dir(self) -> Path:
-        return self.output_dir / "data"
-
-    @property
-    def models_dir(self) -> Path:
-        return self.output_dir / "models"
-
-    @property
-    def reports_dir(self) -> Path:
-        return self.output_dir / "reports"
-
-    @property
-    def figures_dir(self) -> Path:
-        return self.output_dir / "figures"
-
-    @property
-    def inventory_csv(self) -> Path:
-        return self.data_dir / "inventory.csv"
-
-    @property
-    def dedup_csv(self) -> Path:
-        return self.data_dir / "dedup_groups.csv"
-
-    @property
-    def clean_csv(self) -> Path:
-        return self.data_dir / "clean_inventory.csv"
-
-    @property
-    def split_csv(self) -> Path:
-        return self.data_dir / "split.csv"
-
-    @property
-    def dataset_meta_json(self) -> Path:
-        return self.data_dir / "dataset_meta.json"
-
-    @property
-    def stage1_model(self) -> Path:
-        return self.models_dir / "stage1_best.keras"
-
-    @property
-    def final_model(self) -> Path:
-        return self.models_dir / "final.keras"
-
-    @property
-    def class_names_json(self) -> Path:
-        return self.models_dir / "class_names.json"
-
-    @property
-    def train_meta_json(self) -> Path:
-        return self.models_dir / "training_meta.json"
 
 
 settings = Settings()

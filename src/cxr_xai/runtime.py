@@ -1,5 +1,5 @@
 """
-Середовище виконання: каталоги результатів, seed, відомості про версії, налаштування TensorFlow.
+Середовище виконання: seed, відомості про версії, налаштування TensorFlow.
 Модуль не імпортує TensorFlow під час завантаження, тож придатний для кроків без GPU.
 """
 from __future__ import annotations
@@ -14,12 +14,6 @@ from importlib import metadata
 import numpy as np
 
 from cxr_xai.settings import settings
-
-
-def ensure_dirs() -> None:
-    """Створює всі каталоги для результатів."""
-    for d in (settings.data_dir, settings.models_dir, settings.reports_dir, settings.figures_dir):
-        d.mkdir(parents=True, exist_ok=True)
 
 
 def now_str() -> str:

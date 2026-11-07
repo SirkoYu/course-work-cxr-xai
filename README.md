@@ -13,28 +13,50 @@
 NPZ-файли ─ extract ─ check ─ dedup ─ split ─ train ─ evaluate ─ tune ─ report ─ gradcam
                                                  │                  │
                                                  ▼                  ▼
-                                            final.keras     knowledge_base.json
+                                            final.keras     knowledge_base.json запуску
                                                  │                  │
                                                  └───── cxr-xai app ┘
                                        знімок → модель → правила R1–R5 → результат і пояснення
 ```
 
 Кожен крок конвеєра є командою `cxr-xai <команда>`, читає результати попереднього кроку з `outputs/`
-і записує туди свої.
+і записує туди свої:
+
+```
+outputs/
+├── dataset/                 # підготовка даних, спільна для всіх запусків
+│   ├── extract/  check/  dedup/  split/
+└── runs/
+    ├── latest_run.txt       # останній завершений запуск
+    └── 2026-11-05_143000_xception_299/
+        ├── settings.json    # налаштування цього запуску
+        ├── split.csv        # копія поділу, на якому навчено модель
+        ├── knowledge_base.json   # БЗ з підібраними T, δ і плутанинами
+        ├── training/        # моделі, історія навчання, криві
+        ├── validation/      # метрики та прогнози на val
+        ├── tuning/          # добір T і δ
+        ├── test/            # фінальне оцінювання
+        └── gradcam/         # аналіз помилок
+```
+
+Кожен запуск `cxr-xai train` створює новий каталог і не перезаписує попередні, тому результати експериментів
+можна порівнювати. Наступні команди працюють з останнім завершеним запуском; інший вибирається через `--run <назва>`.
+Шаблон `knowledge_base.json` у корені проєкту не змінюється: `cxr-xai tune` записує результат у каталог запуску.
 
 ## Структура проєкту
 
 ```
 cxr_xai/
 ├── .env.example             # шаблон налаштувань (скопіюйте в .env)
-├── knowledge_base.json      # база знань: фрейми + правила вирішувача
+├── knowledge_base.json      # шаблон бази знань: фрейми + правила вирішувача
 ├── pyproject.toml           # залежності, команда cxr-xai, ruff, pytest
 ├── src/cxr_xai/
 │   ├── cli.py               # точка входу: cxr-xai <команда>
 │   ├── app.py               # інтерфейс Streamlit
 │   ├── settings.py          # налаштування з .env (pydantic-settings)
 │   ├── constants.py         # незмінні факти про датасет (порядок класів тощо)
-│   ├── runtime.py           # каталоги, seed, середовище, налаштування TensorFlow
+│   ├── results.py           # структура каталогу результатів, запуски
+│   ├── runtime.py           # seed, середовище, налаштування TensorFlow
 │   ├── json_io.py           # читання та запис JSON
 │   ├── pipeline/            # кроки конвеєра, по одному модулю на команду
 │   │   ├── extract_npz.py        # extract:  NPZ -> PNG
@@ -139,14 +161,14 @@ uv run cxr-xai dedup --threshold 2 --no-check-mirrored
 ```bash
 uv run cxr-xai extract
 uv run cxr-xai check
-uv run cxr-xai dedup             # перегляньте figures/near_duplicate_pairs.png!
+uv run cxr-xai dedup             # перегляньте outputs/dataset/dedup/near_duplicate_pairs.png!
 uv run cxr-xai split
 uv run cxr-xai train
 uv run cxr-xai evaluate
-uv run cxr-xai tune              # записує T, δ і плутанини в knowledge_base.json
+uv run cxr-xai tune              # записує T, δ і плутанини в БЗ запуску
 uv run cxr-xai report            # ОДИН раз, коли все налаштовано
 uv run cxr-xai gradcam --split test
-uv run cxr-xai kb --validate --model outputs/models/final.keras
+uv run cxr-xai kb --validate
 
 uv run cxr-xai app
 ```
@@ -188,12 +210,13 @@ drive.mount('/content/drive')
 ```
 
 Результати зберігаються в `cxr_xai/outputs/` на Drive. Інтерфейс запускайте на своєму комп'ютері:
-скопіюйте `outputs/models/` і `knowledge_base.json` у локальну папку проєкту та виконайте `uv run cxr-xai app`.
+скопіюйте каталог запуску і файл `latest_run.txt` з `outputs/runs/` у таку саму папку локального проєкту та виконайте `uv run cxr-xai app`.
 
 ## Швидка перевірка коду без GPU
 
 Режим `--smoke` бере лише кілька зображень кожного класу й перевіряє, що навчання запускається.
-Результати пишуться в окрему папку `outputs/smoke/` і не зачіпають основні; для курсової вони непридатні.
+Результати пишуться в окремий запуск із суфіксом `_smoke`, який не стає останнім; для курсової вони непридатні.
+Щоб оцінити такий запуск, передайте його назву через `--run`.
 Виконуйте після кроків `extract`, `check`, `dedup`, `split`:
 
 ```powershell
@@ -209,22 +232,24 @@ uv run pytest
 
 ## Що з результатів куди в курсовій
 
-| Файл у `outputs/` | Де використати |
+Шляхи `dataset/...` відносні до `outputs/`, а решта - до каталогу запуску `outputs/runs/<запуск>/`.
+
+| Файл | Де використати |
 |---|---|
-| `reports/extract_report.txt`, `npz_counts.csv`, `name_prefixes_by_class.csv` | 1.1 - опис датасету, склад джерел за класами |
-| `reports/check_files_report.txt`, `inventory_by_class.csv` | 3.1 - перевірка файлів |
-| `reports/dedup_report.txt`, `dedup_by_class.csv`, `figures/phash_nn_hist.png` | 3.1 - виявлення дублікатів, обґрунтування порогу |
-| `reports/split_by_class.csv` | 3.1 - таблиця поділу на вибірки |
-| `models/training_meta.json`, `reports/history_stage*.csv` | 3.1 - гіперпараметри, кількість епох, час навчання, середовище |
-| `figures/training_curves.png` | 3.1 - криві навчання |
-| `reports/metrics_val_stage1_vs_final.csv` | 3.1 - вибір моделі (val) |
-| `reports/metrics_test_stage1_vs_final.csv` | 3.1 - метрики до/після fine-tuning (test) |
-| `reports/classification_report_final_test.txt` | Додаток - повний звіт класифікації |
-| `figures/confusion_final_test*.png` | 3.1 / Додаток - матриця помилок |
-| `reports/tuning_report.txt`, `figures/threshold_tuning_val.png`, `risk_coverage_val.png` | 3.1 - добір T і δ |
-| `reports/typical_confusions_val.csv`, `knowledge_base.json` | 3.2 - заповнення слота «типові плутанини» |
-| `reports/rules_test_stats.csv` | 3.1 - статистика вирішувача на test |
-| `reports/gradcam_report_test.txt`, `figures/gradcam_*_test.png` | 3.1 - аналіз хибних класифікацій |
+| `dataset/extract/extract_report.txt`, `npz_counts.csv`, `name_prefixes_by_class.csv` | 1.1 - опис датасету, склад джерел за класами |
+| `dataset/check/check_files_report.txt`, `inventory_by_class.csv` | 3.1 - перевірка файлів |
+| `dataset/dedup/dedup_report.txt`, `dedup_by_class.csv`, `phash_nn_hist.png` | 3.1 - виявлення дублікатів, обґрунтування порогу |
+| `dataset/split/split_by_class.csv` | 3.1 - таблиця поділу на вибірки |
+| `training/training_meta.json`, `history_stage*.csv`, `settings.json` | 3.1 - гіперпараметри, кількість епох, час навчання, середовище |
+| `training/training_curves.png` | 3.1 - криві навчання |
+| `validation/metrics_val_stage1_vs_final.csv` | 3.1 - вибір моделі (val) |
+| `test/metrics_test_stage1_vs_final.csv` | 3.1 - метрики до/після fine-tuning (test) |
+| `test/classification_report_final_test.txt` | Додаток - повний звіт класифікації |
+| `test/confusion_final_test*.png` | 3.1 / Додаток - матриця помилок |
+| `tuning/tuning_report.txt`, `threshold_tuning_val.png`, `risk_coverage_val.png` | 3.1 - добір T і δ |
+| `tuning/typical_confusions_val.csv`, `knowledge_base.json` | 3.2 - заповнення слота «типові плутанини» |
+| `test/rules_test_stats.csv` | 3.1 - статистика вирішувача на test |
+| `gradcam/gradcam_report_test.txt`, `gradcam/gradcam_*_test.png` | 3.1 - аналіз хибних класифікацій |
 | вивід `cxr-xai kb --validate` | 3.2 - перевірка відповідності індексів виходам мережі |
 | вивід `pytest` | 3.1 - тестування |
 

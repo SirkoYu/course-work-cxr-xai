@@ -10,10 +10,10 @@
 ModelCheckpoint (зберігається модель з найменшою val_loss).
 Для вибору моделі використовується лише валідаційна вибірка; тестова - не торкається.
 
-Результати:
-  outputs/models/stage1_best.keras, outputs/models/final.keras,
-  outputs/models/class_names.json, outputs/models/training_meta.json,
-  outputs/reports/history_stage{1,2}.csv, outputs/figures/training_curves.png
+Результати (outputs/runs/<запуск>/):
+  settings.json, split.csv,
+  training/stage1_best.keras, final.keras, class_names.json, training_meta.json,
+  training/history_stage{1,2}.csv, training_curves.png
 
 Запуск:
     cxr-xai train
@@ -22,6 +22,7 @@ ModelCheckpoint (зберігається модель з найменшою val
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import time
 
@@ -32,7 +33,7 @@ import keras
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from cxr_xai import constants, json_io, runtime
+from cxr_xai import constants, json_io, results, runtime
 from cxr_xai.data import loading
 from cxr_xai.modeling import builder
 from cxr_xai.settings import settings
@@ -102,25 +103,16 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     runtime.configure_tensorflow()
 
-    runtime.ensure_dirs()
     runtime.set_global_seed(settings.seed)
-    if not settings.split_csv.exists():
+    ds = results.dataset()
+    if not ds.split_csv.exists():
         sys.exit("[ПОМИЛКА] Немає split.csv - спочатку виконайте cxr-xai split")
+    run = results.create_run(smoke=bool(args.smoke))
+    shutil.copyfile(ds.split_csv, run.split_csv)
+    print(f"Запуск: {run.name}")
 
     data_root = settings.data_root
-    df = loading.read_split()
-    # У режимі --smoke результати пишуться в окрему папку outputs/smoke і не зачіпають основні.
-    base = settings.output_dir / "smoke" if args.smoke else None
-    out = {
-        "stage1": base / "stage1_best.keras" if base else settings.stage1_model,
-        "final": base / "final.keras" if base else settings.final_model,
-        "class_names": base / "class_names.json" if base else settings.class_names_json,
-        "meta": base / "training_meta.json" if base else settings.train_meta_json,
-        "dir_reports": base or settings.reports_dir,
-        "dir_figures": base or settings.figures_dir,
-    }
-    if base:
-        base.mkdir(parents=True, exist_ok=True)
+    df = loading.read_split(run.split_csv)
     if args.smoke:
         df = df.groupby(["split", "label"], group_keys=False).head(args.smoke).reset_index(drop=True)
         print(f"[SMOKE] Використовується лише {len(df)} зображень - результати не для курсової!")
@@ -140,17 +132,17 @@ def main(argv: list[str] | None = None) -> None:
                   loss="sparse_categorical_crossentropy", metrics=["accuracy"])
     params1 = builder.count_params(model)
     print(f"Етап 1: параметри {params1}")
-    callbacks, timer1 = make_callbacks(out['stage1'])
+    callbacks, timer1 = make_callbacks(run.stage1_model)
     t0 = time.perf_counter()
     hist1 = model.fit(ds_train, validation_data=ds_val, epochs=settings.stage1_epochs,
                       class_weight=class_weight, callbacks=callbacks, verbose=2)
     time1 = time.perf_counter() - t0
     h1 = history_to_df(hist1, timer1, stage=1)
-    h1.to_csv(out['dir_reports'] / "history_stage1.csv", index=False)
+    h1.to_csv(run.training_dir / "history_stage1.csv", index=False)
 
     # ---------------- Етап 2: fine-tuning ----------------
     # Стартуємо з найкращої (за val_loss) моделі етапу 1, збереженої ModelCheckpoint.
-    model = keras.models.load_model(out['stage1'])
+    model = keras.models.load_model(run.stage1_model)
     unfreeze_info = builder.unfreeze_from_block(model, settings.fine_tune_from_block)
     # Після зміни trainable модель обов'язково перекомпільовується.
     model.compile(optimizer=keras.optimizers.Adam(learning_rate=settings.stage2_lr),
@@ -158,18 +150,19 @@ def main(argv: list[str] | None = None) -> None:
     params2 = builder.count_params(model)
     print(f"Етап 2: розморожено {len(unfreeze_info['unfrozen_layers_with_weights'])} шарів з вагами; "
           f"параметри {params2}")
-    callbacks, timer2 = make_callbacks(out['final'])
+    callbacks, timer2 = make_callbacks(run.final_model)
     t0 = time.perf_counter()
     hist2 = model.fit(ds_train, validation_data=ds_val, epochs=settings.stage2_epochs,
                       class_weight=class_weight, callbacks=callbacks, verbose=2)
     time2 = time.perf_counter() - t0
     h2 = history_to_df(hist2, timer2, stage=2)
-    h2.to_csv(out['dir_reports'] / "history_stage2.csv", index=False)
+    h2.to_csv(run.training_dir / "history_stage2.csv", index=False)
 
-    plot_curves(h1, h2, out['dir_figures'] / "training_curves.png")
-    json_io.save_json(constants.CLASS_NAMES, out['class_names'])
+    plot_curves(h1, h2, run.training_dir / "training_curves.png")
+    json_io.save_json(constants.CLASS_NAMES, run.class_names_json)
 
     meta = {
+        "run": run.name,
         "created": runtime.now_str(),
         "smoke_mode": bool(args.smoke),
         "class_names": constants.CLASS_NAMES,
@@ -198,13 +191,15 @@ def main(argv: list[str] | None = None) -> None:
         "seed": settings.seed,
         "environment": runtime.environment_info(),
     }
-    json_io.save_json(meta, out['meta'])
+    json_io.save_json(meta, run.train_meta_json)
     if meta["stage2"]["best_val_loss"] > meta["stage1"]["best_val_loss"]:
         print("[УВАГА] Fine-tuning не зменшив val_loss порівняно з етапом 1. "
               "Це теж результат - зафіксуйте його і порівняйте моделі в cxr-xai evaluate.")
+    if not args.smoke:
+        results.mark_latest(run)   # пробний запуск не стає основним
     print(f"\nНавчання завершено. Етап 1: {time1:.0f} с, етап 2: {time2:.0f} с.")
-    print(f"Фінальна модель: {out['final']}")
-    print(f"Метадані: {out['meta']}")
+    print(f"Фінальна модель: {run.final_model}")
+    print(f"Метадані: {run.train_meta_json}")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@
   2) визначає клас кожного зображення за назвою папки (constants.CLASS_ALIASES);
   3) перевіряє, що файл відкривається (PIL), має підтримуваний формат і
      достатній розмір, а також (за замовчуванням) що його декодує TensorFlow;
-  4) зберігає інвентар outputs/data/inventory.csv та звіти для курсової.
+  4) зберігає інвентар outputs/dataset/check/inventory.csv та звіти для курсової.
 
 Запуск:
     cxr-xai check        # шлях до датасету: --data-root або CXR_DATA_ROOT у .env
@@ -22,7 +22,7 @@ import pandas as pd
 from PIL import Image, UnidentifiedImageError
 from tqdm import tqdm
 
-from cxr_xai import constants, json_io, runtime
+from cxr_xai import constants, json_io, results, runtime
 from cxr_xai.data import class_labels
 from cxr_xai.settings import settings
 
@@ -72,7 +72,8 @@ def main(argv: list[str] | None = None) -> None:
                         help="не перевіряти декодування засобами TensorFlow (швидше)")
     args = parser.parse_args(argv)
 
-    runtime.ensure_dirs()
+    ds = results.dataset()
+    ds.prepare()
     data_root = settings.data_root
     if not data_root.is_dir():
         sys.exit(f"[ПОМИЛКА] Каталог датасету не знайдено: {data_root}\n"
@@ -113,22 +114,22 @@ def main(argv: list[str] | None = None) -> None:
     df = pd.DataFrame(rows)
     if df.empty:
         sys.exit("[ПОМИЛКА] Не знайдено жодного зображення. Перевірте шлях до датасету.")
-    df.to_csv(settings.inventory_csv, index=False)
+    df.to_csv(ds.inventory_csv, index=False)
     json_io.save_json({
         "data_root": str(data_root),
         "created": runtime.now_str(),
         "n_files_total": len(all_files),
         "n_image_files": len(image_files),
         "other_extensions": dict(other_ext),
-    }, settings.dataset_meta_json)
+    }, ds.dataset_meta_json)
 
     # --- Звіти ---
     folder_summary = (df.groupby(["folder", "label"], dropna=False).size()
                       .reset_index(name="n_images").sort_values("folder"))
-    folder_summary.to_csv(settings.reports_dir / "folder_summary.csv", index=False)
+    folder_summary.to_csv(ds.check_dir / "folder_summary.csv", index=False)
 
     bad = df[~df["ok"]]
-    bad.to_csv(settings.reports_dir / "bad_files.csv", index=False)
+    bad.to_csv(ds.check_dir / "bad_files.csv", index=False)
 
     known = df[df["label"].notna()].copy()
     known["min_side"] = known[["width", "height"]].min(axis=1)
@@ -142,7 +143,7 @@ def main(argv: list[str] | None = None) -> None:
     by_class["n_rejected"] = by_class["n_total"] - by_class["n_ok"]
     modes = known.groupby("label")["mode"].agg(lambda s: ", ".join(f"{k}:{v}" for k, v in Counter(s).items()))
     by_class["pixel_modes"] = modes
-    by_class.to_csv(settings.reports_dir / "inventory_by_class.csv")
+    by_class.to_csv(ds.check_dir / "inventory_by_class.csv")
 
     err_types = Counter(e.split(":")[0] for e in bad["error"])
 
@@ -168,9 +169,9 @@ def main(argv: list[str] | None = None) -> None:
                   unknown["folder"].value_counts().head(20).to_string(),
                   "Додайте назви цих папок у constants.CLASS_ALIASES і запустіть скрипт повторно."]
     report = "\n".join(lines)
-    (settings.reports_dir / "check_files_report.txt").write_text(report, encoding="utf-8")
+    (ds.check_dir / "check_files_report.txt").write_text(report, encoding="utf-8")
     print("\n" + report)
-    print(f"\nІнвентар збережено: {settings.inventory_csv}")
+    print(f"\nІнвентар збережено: {ds.inventory_csv}")
 
 
 if __name__ == "__main__":

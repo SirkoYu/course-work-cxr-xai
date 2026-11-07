@@ -52,7 +52,7 @@ def build_augmenter(seed: int = settings.seed) -> keras.Sequential:
     ], name="augmentation")
 
 
-def read_split(split: str | None = None, split_csv: Path = settings.split_csv) -> pd.DataFrame:
+def read_split(split_csv: Path, split: str | None = None) -> pd.DataFrame:
     df = pd.read_csv(split_csv)
     if split is not None:
         df = df[df["split"] == split].reset_index(drop=True)

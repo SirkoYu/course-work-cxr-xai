@@ -27,7 +27,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, UnidentifiedImageError
 
-from cxr_xai import constants
+from cxr_xai import constants, results
 from cxr_xai.knowledge.inference_engine import Decision, InferenceEngine
 from cxr_xai.knowledge.knowledge_base import KnowledgeBase, KnowledgeBaseError
 from cxr_xai.settings import settings
@@ -58,22 +58,24 @@ def load_kb(path: str, mtime: float) -> KnowledgeBase:
 
 
 def load_resources():
-    """Завантажує модель і БЗ та перевіряє їх узгодженість. Повертає (model, kb, engine)."""
-    if not settings.final_model.exists():
-        st.error(f"Файл моделі не знайдено: `{settings.final_model}`.\n\n"
-                 "Спочатку навчіть модель (`cxr-xai train`) або скопіюйте файл `final.keras` "
-                 "і `class_names.json` у каталог `outputs/models/`.", icon="🚫")
+    """Завантажує модель і БЗ та перевіряє їх узгодженість. Повертає (run, model, kb, engine)."""
+    run = results.find_run()
+    if run is None or not run.final_model.exists():
+        st.error(f"Навчену модель не знайдено в `{results.runs_dir()}`.\n\n"
+                 "Спочатку навчіть модель (`cxr-xai train`) або скопіюйте каталог запуску "
+                 "разом із файлом `latest_run.txt` у каталог `outputs/runs/`.", icon="🚫")
         st.stop()
+    kb_file = run.kb_path if run.kb_path.exists() else settings.kb_path   # шаблон, якщо T і δ ще не підібрано
     try:
-        kb = load_kb(str(settings.kb_path), settings.kb_path.stat().st_mtime)
+        kb = load_kb(str(kb_file), kb_file.stat().st_mtime)
     except (OSError, json.JSONDecodeError) as e:
-        st.error(f"Не вдалося прочитати базу знань `{settings.kb_path.name}`: {e}", icon="🚫")
+        st.error(f"Не вдалося прочитати базу знань `{kb_file.name}`: {e}", icon="🚫")
         st.stop()
-    model = load_model(str(settings.final_model), settings.final_model.stat().st_mtime)
+    model = load_model(str(run.final_model), run.final_model.stat().st_mtime)
 
     class_names = None
-    if settings.class_names_json.exists():
-        class_names = json.loads(settings.class_names_json.read_text(encoding="utf-8"))
+    if run.class_names_json.exists():
+        class_names = json.loads(run.class_names_json.read_text(encoding="utf-8"))
     errors = kb.validate(class_names=class_names, num_outputs=int(model.output_shape[-1]))
     if errors:
         st.error("База знань не узгоджена з моделлю, аналіз неможливий:\n\n- " + "\n- ".join(errors), icon="🚫")
@@ -83,7 +85,7 @@ def load_resources():
     except KnowledgeBaseError as e:
         st.error(f"Помилка в правилах вирішувача: {e}", icon="🚫")
         st.stop()
-    return model, kb, engine
+    return run, model, kb, engine
 
 
 # --------------------------------------------------------------------------- обробка
@@ -164,15 +166,15 @@ def scores_figure(decision: Decision, kb: KnowledgeBase):
     return fig
 
 
-def render_sidebar(kb: KnowledgeBase, model) -> float:
+def render_sidebar(run: results.RunResults, kb: KnowledgeBase, model) -> float:
     st.sidebar.header("Про систему")
     st.sidebar.markdown(
         "- **Модель:** Xception (ImageNet) + fine-tuning\n"
         "- **База знань:** фреймова, JSON\n"
         "- **Вирішувач:** правила R1–R5 над оцінками softmax\n"
         "- **Пояснення:** трасування правил + Grad-CAM")
-    mtime = datetime.fromtimestamp(settings.final_model.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-    st.sidebar.caption(f"Файл моделі: `{settings.final_model.name}` ({mtime}); "
+    mtime = datetime.fromtimestamp(run.final_model.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    st.sidebar.caption(f"Запуск: `{run.name}` ({mtime}); "
                        f"вхід {int(model.input_shape[1])}×{int(model.input_shape[2])}")
     p = kb.decision_params()
     st.sidebar.caption(f"Версія БЗ: {kb.data['kb_meta'].get('version')}; T = {p['T']:.2f}; δ = {p['delta']:.2f}")
@@ -245,7 +247,7 @@ def render_result(result: dict, rgb: np.ndarray, kb: KnowledgeBase, alpha: float
 
     st.error(desc.get("disclaimer", "") + " Оцінки softmax не є каліброваними ймовірностями.", icon="🛑")
     report = (f"Файл: {file_name}\nДата аналізу: {datetime.now():%Y-%m-%d %H:%M:%S}\n"
-              f"Модель: {settings.final_model.name}\n\n" + d.to_text(kb))
+              f"Запуск: {results.find_run().name}\n\n" + d.to_text(kb))
     st.download_button("💾 Завантажити текстовий звіт", data=report.encode("utf-8"),
                        file_name=f"cxr_report_{datetime.now():%Y%m%d_%H%M%S}.txt", mime="text/plain")
 
@@ -257,8 +259,8 @@ def main() -> None:
                "пояснення результатів (трасування правил і Grad-CAM)")
     st.warning(DISCLAIMER, icon="⚠️")
 
-    model, kb, engine = load_resources()
-    alpha = render_sidebar(kb, model)
+    run, model, kb, engine = load_resources()
+    alpha = render_sidebar(run, kb, model)
 
     st.subheader("1. Завантажте рентгенограму")
     uploaded = st.file_uploader("Фронтальна (передньо-задня або задньо-передня) рентгенограма органів "

@@ -11,7 +11,7 @@
   3) з кожної групи залишає одне зображення (settings.dedup_policy = "keep_one");
   4) рахує, скільки груп дублікатів розірвано ОРИГІНАЛЬНИМ поділом датасету
      (тобто скільки витоків містив готовий поділ);
-  5) зберігає outputs/data/clean_inventory.csv і звіти/рисунки для курсової.
+  5) зберігає outputs/dataset/dedup/clean_inventory.csv і звіти/рисунки для курсової.
 
 Запуск:
     cxr-xai dedup [--threshold 4] [--workers 8]
@@ -31,7 +31,7 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 
-from cxr_xai import constants, runtime
+from cxr_xai import constants, results, runtime
 from cxr_xai.data import deduplication
 from cxr_xai.settings import settings
 
@@ -95,11 +95,12 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     check_mirrored = settings.check_mirrored and not args.no_mirror
 
-    runtime.ensure_dirs()
-    if not settings.inventory_csv.exists():
+    ds = results.dataset()
+    ds.prepare()
+    if not ds.inventory_csv.exists():
         sys.exit("[ПОМИЛКА] Немає inventory.csv - спочатку виконайте cxr-xai check")
     data_root = settings.data_root
-    inv = pd.read_csv(settings.inventory_csv)
+    inv = pd.read_csv(ds.inventory_csv)
     inv["source_split"] = inv["source_split"].fillna("")
     df = inv[inv["ok"]].reset_index(drop=True)
     print(f"Придатних зображень: {len(df)} (з {len(inv)} в інвентарі)")
@@ -115,9 +116,9 @@ def main(argv: list[str] | None = None) -> None:
     df["nn_phash_dist"] = nn_dist
     df = deduplication.decide_actions(df, policy=settings.dedup_policy, drop_conflicts=settings.drop_conflicting_groups)
 
-    df.to_csv(settings.dedup_csv, index=False)
+    df.to_csv(ds.dedup_csv, index=False)
     clean = df[df["action"] == "keep"].reset_index(drop=True)
-    clean.to_csv(settings.clean_csv, index=False)
+    clean.to_csv(ds.clean_csv, index=False)
 
     # --- Таблиця всіх знайдених пар ---
     rows = []
@@ -135,7 +136,7 @@ def main(argv: list[str] | None = None) -> None:
         pairs_df["j_label"] = df["label"].values[pairs_df["j"]]
         pairs_df["i_source_split"] = df["source_split"].values[pairs_df["i"]]
         pairs_df["j_source_split"] = df["source_split"].values[pairs_df["j"]]
-    pairs_df.to_csv(settings.data_dir / "duplicate_pairs.csv", index=False)
+    pairs_df.to_csv(ds.dedup_dir / "duplicate_pairs.csv", index=False)
 
     # --- Статистика для курсової ---
     sha_counts = df["sha256"].value_counts()
@@ -159,10 +160,10 @@ def main(argv: list[str] | None = None) -> None:
     by_class.loc["Разом"] = by_class.sum()
     by_class["dropped_%"] = (100 * (by_class["before"] - by_class["after"]) /
                              by_class["before"].replace(0, np.nan)).round(2)
-    by_class.to_csv(settings.reports_dir / "dedup_by_class.csv")
+    by_class.to_csv(ds.dedup_dir / "dedup_by_class.csv")
 
-    plot_nn_hist(nn_dist, settings.phash_threshold, settings.figures_dir / "phash_nn_hist.png")
-    plot_pair_examples(df, pairs_df, data_root, settings.figures_dir / "near_duplicate_pairs.png")
+    plot_nn_hist(nn_dist, settings.phash_threshold, ds.dedup_dir / "phash_nn_hist.png")
+    plot_pair_examples(df, pairs_df, data_root, ds.dedup_dir / "near_duplicate_pairs.png")
 
     report = "\n".join([
         "ЗВІТ ПРО ВИЯВЛЕННЯ ДУБЛІКАТІВ",
@@ -181,11 +182,11 @@ def main(argv: list[str] | None = None) -> None:
         "",
         by_class.to_string(),
         "",
-        "Рисунки: figures/phash_nn_hist.png, figures/near_duplicate_pairs.png",
-        "Список пар: data/duplicate_pairs.csv",
+        "Рисунки: phash_nn_hist.png, near_duplicate_pairs.png",
+        "Список пар: duplicate_pairs.csv",
         "ПЕРЕВІРТЕ рисунок пар вручну: якщо там різні знімки - зменште поріг (--threshold).",
     ])
-    (settings.reports_dir / "dedup_report.txt").write_text(report, encoding="utf-8")
+    (ds.dedup_dir / "dedup_report.txt").write_text(report, encoding="utf-8")
     print("\n" + report)
 
 

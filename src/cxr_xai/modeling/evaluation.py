@@ -120,20 +120,20 @@ def plot_confusion(cm, class_names, path: Path, normalize: bool = False, title: 
     plt.close(fig)
 
 
-def save_all(metrics: dict, name: str, split: str, class_names=constants.CLASS_NAMES) -> None:
+def save_all(metrics: dict, name: str, split: str, out_dir: Path, class_names=constants.CLASS_NAMES) -> None:
     """Зберігає JSON метрик, CSV/TXT звіту та рисунки матриці помилок."""
     from cxr_xai import json_io
     tag = f"{name}_{split}"
     json_io.save_json({k: v for k, v in metrics.items() if k != "report_text"},
-                     settings.reports_dir / f"metrics_{tag}.json")
-    report_frame(metrics).to_csv(settings.reports_dir / f"classification_report_{tag}.csv")
-    (settings.reports_dir / f"classification_report_{tag}.txt").write_text(metrics["report_text"],
+                     out_dir / f"metrics_{tag}.json")
+    report_frame(metrics).to_csv(out_dir / f"classification_report_{tag}.csv")
+    (out_dir / f"classification_report_{tag}.txt").write_text(metrics["report_text"],
                                                                          encoding="utf-8")
     pd.DataFrame(metrics["confusion_matrix"], index=class_names, columns=class_names) \
-        .to_csv(settings.reports_dir / f"confusion_matrix_{tag}.csv")
+        .to_csv(out_dir / f"confusion_matrix_{tag}.csv")
     plot_confusion(metrics["confusion_matrix"], class_names,
-                   settings.figures_dir / f"confusion_{tag}.png", normalize=False,
+                   out_dir / f"confusion_{tag}.png", normalize=False,
                    title=f"Матриця помилок ({name}, {split})")
     plot_confusion(metrics["confusion_matrix"], class_names,
-                   settings.figures_dir / f"confusion_{tag}_norm.png", normalize=True,
+                   out_dir / f"confusion_{tag}_norm.png", normalize=True,
                    title=f"Нормована матриця помилок ({name}, {split})")

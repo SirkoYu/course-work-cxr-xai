@@ -3,11 +3,11 @@
 для бази знань за ВАЛІДАЦІЙНОЮ вибіркою (модель final).
 
 Що робить:
-  1) бере прогнози outputs/data/predictions_final_val.csv (створює cxr-xai evaluate);
+  1) бере прогнози validation/predictions_final_val.csv (створює cxr-xai evaluate);
   2) для кожного значення сітки рахує статистику правил R2 (p1 < T) і R3 (margin < δ),
      обирає T і δ за критерієм settings.threshold_criterion;
   3) за матрицею помилок на val формує слот typical_confusions кожного фрейму-класу;
-  4) записує результати в knowledge_base.json (стара версія зберігається як резервна копія);
+  4) записує БЗ із результатами в каталог запуску (шаблон knowledge_base.json не змінюється);
   5) перевіряє узгодженість БЗ з моделлю і рахує статистику вирішувача на val.
 
 Запуск:
@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 
 import matplotlib
@@ -25,7 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from cxr_xai import constants, json_io, runtime
+from cxr_xai import constants, json_io, results, runtime
 from cxr_xai.knowledge import rule_tuning
 from cxr_xai.knowledge.inference_engine import InferenceEngine
 from cxr_xai.knowledge.knowledge_base import DECISION_FRAME, KnowledgeBase
@@ -71,8 +70,8 @@ def plot_risk_coverage(t_tab, t_best, path) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     argparse.ArgumentParser(description="Добір порогів T і δ, типові плутанини -> база знань").parse_args(argv)
-    runtime.ensure_dirs()
-    pred_path = settings.data_dir / "predictions_final_val.csv"
+    run = results.require_run()
+    pred_path = run.validation_dir / "predictions_final_val.csv"
     if not pred_path.exists():
         sys.exit("[ПОМИЛКА] Немає predictions_final_val.csv - спочатку виконайте cxr-xai evaluate")
     pred = pd.read_csv(pred_path)
@@ -87,10 +86,10 @@ def main(argv: list[str] | None = None) -> None:
                                         settings.target_accuracy)
     d_best, d_why = rule_tuning.choose_threshold(d_tab, settings.threshold_criterion, settings.max_flag_rate,
                                         settings.target_accuracy)
-    t_tab.round(4).to_csv(settings.reports_dir / "tuning_T_val.csv", index=False)
-    d_tab.round(4).to_csv(settings.reports_dir / "tuning_delta_val.csv", index=False)
-    plot_tuning(t_tab, d_tab, t_best, d_best, settings.figures_dir / "threshold_tuning_val.png")
-    plot_risk_coverage(t_tab, t_best, settings.figures_dir / "risk_coverage_val.png")
+    t_tab.round(4).to_csv(run.tuning_dir / "tuning_T_val.csv", index=False)
+    d_tab.round(4).to_csv(run.tuning_dir / "tuning_delta_val.csv", index=False)
+    plot_tuning(t_tab, d_tab, t_best, d_best, run.tuning_dir / "threshold_tuning_val.png")
+    plot_risk_coverage(t_tab, t_best, run.tuning_dir / "risk_coverage_val.png")
 
     # --- 2. Типові плутанини за матрицею помилок на val ---
     from sklearn.metrics import confusion_matrix
@@ -98,8 +97,6 @@ def main(argv: list[str] | None = None) -> None:
     confusions = rule_tuning.typical_confusions(cm, constants.CLASS_NAMES, settings.confusion_min_rate)
 
     # --- 3. Запис у базу знань ---
-    backup = settings.kb_path.with_name(settings.kb_path.stem + ".backup.json")
-    shutil.copyfile(settings.kb_path, backup)
     kb = KnowledgeBase.load(settings.kb_path)
     kb.set_slot(DECISION_FRAME, "T", t_best)
     kb.set_slot(DECISION_FRAME, "delta", d_best)
@@ -107,27 +104,27 @@ def main(argv: list[str] | None = None) -> None:
         "source": "validation", "n_samples": int(len(pred)), "n_errors": int((~correct).sum()),
         "criterion": settings.threshold_criterion, "max_flag_rate": settings.max_flag_rate,
         "T_reason": t_why, "delta_reason": d_why, "confusion_min_rate": settings.confusion_min_rate,
-        "model_file": settings.final_model.name, "date": runtime.now_str(),
+        "model_file": run.final_model.name, "date": runtime.now_str(),
     })
     for c, items in confusions.items():
         kb.set_slot(c, "typical_confusions", items)
     kb.data["kb_meta"]["updated"] = runtime.now_str()
     kb.data["kb_meta"]["updated_by"] = "cxr-xai tune"
-    class_names = json_io.load_json(settings.class_names_json) if settings.class_names_json.exists() \
+    class_names = json_io.load_json(run.class_names_json) if run.class_names_json.exists() \
         else constants.CLASS_NAMES
     errors = kb.validate(class_names=class_names, num_outputs=probs.shape[1])
     if errors:
         sys.exit("[ПОМИЛКА] Після оновлення БЗ некоректна:\n- " + "\n- ".join(errors))
-    kb.save()
+    kb.save(run.kb_path)
 
     # --- 4. Статистика вирішувача на val з обраними параметрами ---
     engine = InferenceEngine(kb)
     summary, per_sample = rule_tuning.engine_statistics(engine, probs, pred["label"].tolist())
-    pd.DataFrame([summary]).round(4).to_csv(settings.reports_dir / "rules_val_stats.csv", index=False)
-    per_sample.to_csv(settings.data_dir / "decisions_final_val.csv", index=False)
+    pd.DataFrame([summary]).round(4).to_csv(run.tuning_dir / "rules_val_stats.csv", index=False)
+    per_sample.to_csv(run.tuning_dir / "decisions_final_val.csv", index=False)
 
     conf_rows = [{"class": c, **item} for c, items in confusions.items() for item in items]
-    pd.DataFrame(conf_rows).to_csv(settings.reports_dir / "typical_confusions_val.csv", index=False)
+    pd.DataFrame(conf_rows).to_csv(run.tuning_dir / "typical_confusions_val.csv", index=False)
 
     sel_t = t_tab[t_tab["threshold"] == t_best].iloc[0]
     sel_d = d_tab[d_tab["threshold"] == d_best].iloc[0]
@@ -150,9 +147,9 @@ def main(argv: list[str] | None = None) -> None:
         "Статистика вирішувача на val:",
         *[f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}" for k, v in summary.items()],
         "",
-        f"Базу знань оновлено: {settings.kb_path} (резервна копія: {backup.name})",
+        f"Базу знань із підібраними параметрами збережено: {run.kb_path} (шаблон {settings.kb_path.name} не змінено)",
     ])
-    (settings.reports_dir / "tuning_report.txt").write_text(report, encoding="utf-8")
+    (run.tuning_dir / "tuning_report.txt").write_text(report, encoding="utf-8")
     print(report)
     if (~correct).sum() < 30:
         print("\n[УВАГА] На валідаційній вибірці менше 30 помилок - оцінки порогів нестабільні; "

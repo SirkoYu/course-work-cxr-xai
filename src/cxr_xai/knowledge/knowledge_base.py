@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from cxr_xai import constants
+from cxr_xai import constants, results
 from cxr_xai.settings import settings
 
 PROTOTYPE = "CXRClass"
@@ -260,17 +260,21 @@ class KnowledgeBase:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Перевірка та перегляд бази знань")
     parser.add_argument("--validate", action="store_true")
+    parser.add_argument("--template", action="store_true", help="перевірити шаблон БЗ, а не БЗ запуску")
     parser.add_argument("--model", default=None, help="шлях до .keras для перевірки кількості виходів")
     parser.add_argument("--describe", default=None, help="назва класу, напр. COVID-19")
     args = parser.parse_args(argv)
 
-    kb = KnowledgeBase.load(settings.kb_path)
+    run = results.find_run()
+    kb_file = run.kb_path if run and run.kb_path.exists() and not args.template else settings.kb_path
+    print(f"База знань: {kb_file}")
+    kb = KnowledgeBase.load(kb_file)
     if args.describe:
         print(json.dumps(kb.describe(args.describe), ensure_ascii=False, indent=2))
     if args.validate or not args.describe:
         class_names = None
-        if settings.class_names_json.exists():
-            with open(settings.class_names_json, encoding="utf-8") as f:
+        if run and run.class_names_json.exists():
+            with open(run.class_names_json, encoding="utf-8") as f:
                 class_names = json.load(f)
             print(f"Порядок виходів моделі (class_names.json): {class_names}")
         else:
