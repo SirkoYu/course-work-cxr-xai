@@ -1,0 +1,15 @@
+# Локальні налаштування (шаблон: .env.example)
+.env
+
+# Дані та результати
+dataverse_files/
+dataset/
+outputs/
+knowledge_base.backup.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
