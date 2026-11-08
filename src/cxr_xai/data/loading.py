@@ -61,17 +61,21 @@ def read_split(split_csv: Path, split: str | None = None) -> pd.DataFrame:
 
 def make_dataset(df: pd.DataFrame, data_root: Path, training: bool,
                  batch_size: int = settings.batch_size, img_size: int = settings.img_size,
-                 seed: int = settings.seed) -> tf.data.Dataset:
+                 seed: int = settings.seed, repeat: bool = False) -> tf.data.Dataset:
     """
     Створює tf.data.Dataset з пар (зображення, індекс класу).
     training=True: перемішування + аугментація; інакше порядок рядків df зберігається
     (потрібно, щоб зіставити прогнози з файлами).
+    repeat=True: нескінченний потік (з новим перемішуванням на кожному проході) - для
+    model.fit зі steps_per_epoch, коротшим або не кратним повній епосі.
     """
     paths = [str(Path(data_root) / p) for p in df["path"]]
     labels = df["label_idx"].astype("int32").to_numpy()
     ds = tf.data.Dataset.from_tensor_slices((paths, labels))
     if training:
         ds = ds.shuffle(len(paths), seed=seed, reshuffle_each_iteration=True)
+    if repeat:
+        ds = ds.repeat()
     ds = ds.map(lambda p, y: (load_image(p, img_size), y), num_parallel_calls=AUTOTUNE)
     ds = ds.batch(batch_size)
     if training:

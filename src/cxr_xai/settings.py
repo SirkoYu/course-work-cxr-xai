@@ -61,8 +61,9 @@ class Settings(BaseSettings):
     split_ratios: dict[str, float] = {"train": 0.70, "val": 0.15, "test": 0.15}
 
     # --- Модель і навчання ---
-    img_size: int = Field(299, ge=71)           # 299 - стандартний вхід Xception, 71 - мінімум
-    batch_size: int = Field(32, gt=0)
+    # Зображення датасету - 224x224, тож 299 (стандартний вхід Xception) лише додає обчислень.
+    img_size: int = Field(224, ge=71)           # 71 - мінімальний вхід Xception
+    batch_size: int = Field(16, gt=0)           # вміщується в GPU з 4 ГБ
     # imagenet - перенесення знань; none - випадкові ваги (ЛИШЕ для перевірки коду).
     backbone_weights: Literal["imagenet", "none"] = "imagenet"
     dropout: float = Field(0.3, ge=0, lt=1)
@@ -75,6 +76,11 @@ class Settings(BaseSettings):
     stage2_epochs: int = Field(20, gt=0)
     stage2_lr: float = Field(1e-5, gt=0)
     fine_tune_from_block: int = Field(13, ge=1, le=14)
+    # Кроків (батчів) між перевірками на валідації в етапі 2. None - щоепохи (повний прохід train).
+    # На повному датасеті fine-tuning досягає мінімуму val_loss ще всередині першої епохи, тож
+    # частіша перевірка дає змогу зберегти найкращу модель; stage2_epochs і терпіння колбеків
+    # тоді рахуються в таких «раундах», а не в повних епохах.
+    stage2_steps_per_epoch: int | None = Field(None, gt=0)
 
     use_class_weights: bool = True              # компенсація дисбалансу класів
     early_stop_patience: int = Field(5, gt=0)

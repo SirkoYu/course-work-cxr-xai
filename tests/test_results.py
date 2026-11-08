@@ -32,8 +32,8 @@ def test_create_run_saves_settings_snapshot(use_settings):
 
 
 def test_default_name_shows_kind_of_run(use_settings):
-    assert results.default_run_name(smoke=True).endswith("_xception_299_smoke")
-    assert results.default_run_name().endswith("_xception_299")
+    assert results.default_run_name(smoke=True).endswith("_xception_224_smoke")
+    assert results.default_run_name().endswith("_xception_224")
 
 
 def test_existing_run_is_never_overwritten(use_settings):

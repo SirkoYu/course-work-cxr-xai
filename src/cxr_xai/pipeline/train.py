@@ -151,9 +151,20 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Етап 2: розморожено {len(unfreeze_info['unfrozen_layers_with_weights'])} шарів з вагами; "
           f"параметри {params2}")
     callbacks, timer2 = make_callbacks(run.final_model)
+    steps2 = settings.stage2_steps_per_epoch
+    if steps2:
+        # Нескінченний потік: валідація кожні steps2 батчів, а не раз на повну епоху.
+        ds_train2 = loading.make_dataset(train_df, data_root, training=True,
+                                         batch_size=settings.batch_size, repeat=True)
+        full_epoch = -(-len(train_df) // settings.batch_size)
+        print(f"Етап 2: перевірка на валідації кожні {steps2} кроків "
+              f"(~{steps2 / full_epoch:.2f} епохи)")
+    else:
+        ds_train2 = ds_train
     t0 = time.perf_counter()
-    hist2 = model.fit(ds_train, validation_data=ds_val, epochs=settings.stage2_epochs,
-                      class_weight=class_weight, callbacks=callbacks, verbose=2)
+    hist2 = model.fit(ds_train2, validation_data=ds_val, epochs=settings.stage2_epochs,
+                      steps_per_epoch=steps2, class_weight=class_weight, callbacks=callbacks,
+                      verbose=2)
     time2 = time.perf_counter() - t0
     h2 = history_to_df(hist2, timer2, stage=2)
     h2.to_csv(run.training_dir / "history_stage2.csv", index=False)
@@ -179,6 +190,7 @@ def main(argv: list[str] | None = None) -> None:
                    "time_s": round(time1, 1), "params": params1},
         "stage2": {"lr": settings.stage2_lr, "max_epochs": settings.stage2_epochs, "epochs_run": len(h2),
                    "fine_tune_from_block": settings.fine_tune_from_block,
+                   "steps_per_epoch": steps2,
                    "unfrozen_layers": unfreeze_info["unfrozen_layers_with_weights"],
                    "best_epoch": int(h2["val_loss"].idxmin()) + 1,
                    "best_val_loss": float(h2["val_loss"].min()),
