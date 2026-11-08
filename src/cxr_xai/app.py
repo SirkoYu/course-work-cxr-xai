@@ -27,7 +27,7 @@ import pandas as pd
 import streamlit as st
 from PIL import Image, UnidentifiedImageError
 
-from cxr_xai import constants, results
+from cxr_xai import constants, results, runtime
 from cxr_xai.knowledge.inference_engine import Decision, InferenceEngine
 from cxr_xai.knowledge.knowledge_base import KnowledgeBase, KnowledgeBaseError
 from cxr_xai.settings import settings
@@ -48,6 +48,7 @@ class UserInputError(Exception):
 # --------------------------------------------------------------------------- ресурси
 @st.cache_resource(show_spinner="Завантаження моделі…")
 def load_model(path: str, mtime: float):
+    runtime.configure_tensorflow()   # GPU, якщо доступний, інакше CPU
     import keras  # імпорт тут: інтерфейс показує повідомлення ще до завантаження TF
     return keras.models.load_model(path, compile=False)
 

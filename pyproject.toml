@@ -17,6 +17,11 @@ dependencies = [
     "tqdm>=4.65",
 ]
 
+[project.optional-dependencies]
+# Навчання на NVIDIA GPU (лише Linux/WSL2: TensorFlow >= 2.11 не підтримує GPU на «рідному» Windows).
+# Встановлення: uv sync --extra gpu. На Windows/macOS цей пакет пропускається - працює CPU.
+gpu = ["tensorflow[and-cuda]>=2.16; sys_platform == 'linux'"]
+
 [project.scripts]
 cxr-xai = "cxr_xai.cli:main"
 

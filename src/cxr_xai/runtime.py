@@ -56,14 +56,62 @@ def environment_info() -> dict:
     return info
 
 
-def configure_tensorflow() -> None:
-    """Вмикає поступове виділення пам'яті GPU і (за потреби) mixed precision."""
+def preload_cuda_libraries() -> None:
+    """
+    Linux/WSL: попередньо завантажує бібліотеки CUDA з pip-пакетів nvidia-* (extra «gpu»).
+    TensorFlow 2.21 шукає їх за власним RUNPATH, де немає, наприклад, nvidia/cusolver/lib,
+    тому без цього GPU відключається («Cannot dlopen some GPU libraries»). Уже завантажену
+    бібліотеку dlopen знаходить за її soname, тож LD_LIBRARY_PATH задавати не потрібно.
+    Має викликатися до першого звернення TensorFlow до GPU. Без пакетів nvidia - нічого не робить.
+    """
+    if sys.platform != "linux":
+        return
+    import ctypes
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.find_spec("nvidia")
+    if spec is None or not spec.submodule_search_locations:
+        return
+    for root in spec.submodule_search_locations:
+        for lib in sorted(Path(root).glob("*/lib/lib*.so*")):
+            if lib.name.startswith("libnvblas"):   # перехоплює BLAS-виклики, TensorFlow не потрібна
+                continue
+            try:
+                ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass   # не критично: TensorFlow спробує знайти бібліотеку сам
+
+
+def configure_tensorflow() -> str:
+    """
+    Вмикає поступове виділення пам'яті GPU і (за потреби) mixed precision.
+    Якщо GPU недоступний, TensorFlow працює на CPU - функція лише явно про це повідомляє.
+    Повертає "GPU" або "CPU".
+    """
+    preload_cuda_libraries()
     import keras
     import tensorflow as tf
-    for gpu in tf.config.list_physical_devices("GPU"):
+    gpus = tf.config.list_physical_devices("GPU")
+    for gpu in gpus:
         try:
             tf.config.experimental.set_memory_growth(gpu, True)
         except RuntimeError:
             pass
+    if gpus:
+        names = []
+        for gpu in gpus:
+            try:
+                names.append(tf.config.experimental.get_device_details(gpu).get("device_name", gpu.name))
+            except Exception:  # noqa: BLE001 - назва пристрою не критична
+                names.append(gpu.name)
+        print(f"Пристрій: GPU ({', '.join(names)})")
+    else:
+        print("[УВАГА] GPU недоступний - обчислення виконуються на CPU (значно повільніше). "
+              "Для GPU запускайте в WSL2/Linux: uv sync --extra gpu")
     if settings.mixed_precision:
-        keras.mixed_precision.set_global_policy("mixed_float16")
+        if gpus:
+            keras.mixed_precision.set_global_policy("mixed_float16")
+        else:
+            print("[УВАГА] mixed_precision вимкнено: на CPU float16 лише сповільнює обчислення")
+    return "GPU" if gpus else "CPU"
