@@ -58,7 +58,7 @@ def environment_info() -> dict:
 
 def preload_cuda_libraries() -> None:
     """
-    Linux/WSL: попередньо завантажує бібліотеки CUDA з pip-пакетів nvidia-* (extra «gpu»).
+    Linux/WSL: попередньо завантажує бібліотеки CUDA з pip-пакетів nvidia-* (tensorflow[and-cuda]).
     TensorFlow 2.21 шукає їх за власним RUNPATH, де немає, наприклад, nvidia/cusolver/lib,
     тому без цього GPU відключається («Cannot dlopen some GPU libraries»). Уже завантажену
     бібліотеку dlopen знаходить за її soname, тож LD_LIBRARY_PATH задавати не потрібно.
@@ -108,7 +108,7 @@ def configure_tensorflow() -> str:
         print(f"Пристрій: GPU ({', '.join(names)})")
     else:
         print("[УВАГА] GPU недоступний - обчислення виконуються на CPU (значно повільніше). "
-              "Для GPU запускайте в WSL2/Linux: uv sync --extra gpu")
+              "Для GPU запускайте в WSL2/Linux з драйвером NVIDIA (перевірка: nvidia-smi)")
     if settings.mixed_precision:
         if gpus:
             keras.mixed_precision.set_global_policy("mixed_float16")
