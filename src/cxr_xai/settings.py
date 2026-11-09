@@ -66,23 +66,25 @@ class Settings(BaseSettings):
     batch_size: int = Field(16, gt=0)           # вміщується в GPU з 4 ГБ
     # imagenet - перенесення знань; none - випадкові ваги (ЛИШЕ для перевірки коду).
     backbone_weights: Literal["imagenet", "none"] = "imagenet"
-    dropout: float = Field(0.3, ge=0, lt=1)
+    dropout: float = Field(0.5, ge=0, lt=1)
 
     # Етап 1: навчається лише «голова» класифікатора, основа Xception заморожена.
-    stage1_epochs: int = Field(15, gt=0)
+    stage1_epochs: int = Field(5, gt=0)
     stage1_lr: float = Field(1e-3, gt=0)
     # Етап 2 (fine-tuning): розморожуються блоки Xception, починаючи з fine_tune_from_block
-    # (13-14 - exit flow), з меншою швидкістю навчання.
-    stage2_epochs: int = Field(20, gt=0)
-    stage2_lr: float = Field(1e-5, gt=0)
-    fine_tune_from_block: int = Field(13, ge=1, le=14)
+    # (13-14 - exit flow, 8 - кінець middle flow), з меншою швидкістю навчання.
+    stage2_epochs: int = Field(40, gt=0)
+    stage2_lr: float = Field(3e-5, gt=0)
+    fine_tune_from_block: int = Field(8, ge=1, le=14)
     # Кроків (батчів) між перевірками на валідації в етапі 2. None - щоепохи (повний прохід train).
     # На повному датасеті fine-tuning досягає мінімуму val_loss ще всередині першої епохи, тож
     # частіша перевірка дає змогу зберегти найкращу модель; stage2_epochs і терпіння колбеків
     # тоді рахуються в таких «раундах», а не в повних епохах.
-    stage2_steps_per_epoch: int | None = Field(None, gt=0)
+    stage2_steps_per_epoch: int | None = Field(320, gt=0)
 
-    use_class_weights: bool = True              # компенсація дисбалансу класів
+    # Компенсація дисбалансу класів. Вимкнено: дисбаланс помірний (1:2.5), а з вагами модель
+    # помітно завищувала менш представлені класи.
+    use_class_weights: bool = False
     early_stop_patience: int = Field(5, gt=0)
     reduce_lr_patience: int = Field(2, gt=0)
     reduce_lr_factor: float = Field(0.2, gt=0, lt=1)

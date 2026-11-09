@@ -151,7 +151,8 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Етап 2: розморожено {len(unfreeze_info['unfrozen_layers_with_weights'])} шарів з вагами; "
           f"параметри {params2}")
     callbacks, timer2 = make_callbacks(run.final_model)
-    steps2 = settings.stage2_steps_per_epoch
+    # У пробному запуску даних мало - перевірка раз на (коротку) епоху.
+    steps2 = None if args.smoke else settings.stage2_steps_per_epoch
     if steps2:
         # Нескінченний потік: валідація кожні steps2 батчів, а не раз на повну епоху.
         ds_train2 = loading.make_dataset(train_df, data_root, training=True,
