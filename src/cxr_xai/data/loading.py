@@ -42,12 +42,18 @@ def build_augmenter(seed: int = settings.seed) -> keras.Sequential:
     Аугментація ЛИШЕ для навчальної вибірки: невеликі повороти, масштаб,
     зсув і контраст, що імітують відмінності укладання пацієнта та апаратури.
     Віддзеркалення не застосовується (анатомічна асиметрія).
+
+    Порожні ділянки після повороту/зсуву/масштабу заповнюються відбиттям (reflect), а НЕ
+    чорним кольором: чорні кути з'являлися лише на навчальних зображеннях, а частка чорних
+    країв на знімках різних класів різна. Модель з чорним заповненням на чистих знімках
+    систематично завищувала Tuberculosis і Viral Pneumonia (класи з найменшою часткою
+    чорних країв): accuracy на валідації 0.71 без аугментації проти 0.80 з нею.
     """
     return keras.Sequential([
-        keras.layers.RandomRotation(settings.aug_rotation, fill_mode="constant", fill_value=0.0, seed=seed),
-        keras.layers.RandomZoom(settings.aug_zoom, fill_mode="constant", fill_value=0.0, seed=seed + 1),
+        keras.layers.RandomRotation(settings.aug_rotation, fill_mode="reflect", seed=seed),
+        keras.layers.RandomZoom(settings.aug_zoom, fill_mode="reflect", seed=seed + 1),
         keras.layers.RandomTranslation(settings.aug_translation, settings.aug_translation,
-                                       fill_mode="constant", fill_value=0.0, seed=seed + 2),
+                                       fill_mode="reflect", seed=seed + 2),
         keras.layers.RandomContrast(settings.aug_contrast, seed=seed + 3),
     ], name="augmentation")
 
