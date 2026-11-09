@@ -45,7 +45,7 @@ OVERRIDES = {
               "stage1_epochs", "stage1_lr", "stage2_epochs", "stage2_lr", "fine_tune_from_block",
               "stage2_steps_per_epoch", "use_class_weights", "early_stop_patience", "reduce_lr_patience",
               "reduce_lr_factor", "min_lr", "mixed_precision", "aug_rotation", "aug_zoom", "aug_translation",
-              "aug_contrast"),
+              "aug_contrast", "aug_probability"),
     "evaluate": ("run", "data_root", "output_dir", "batch_size"),
     "tune": ("run", "output_dir", "kb_path", "threshold_criterion", "target_accuracy", "max_flag_rate", "t_grid",
              "delta_grid", "confusion_min_rate"),

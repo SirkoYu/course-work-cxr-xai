@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     aug_zoom: float = Field(0.10, ge=0)
     aug_translation: float = Field(0.05, ge=0)
     aug_contrast: float = Field(0.10, ge=0)
+    # Частка навчальних зображень, що аугментуються; решта подаються без змін (чіткими),
+    # щоб модель не сприймала чіткість знімка як ознаку класу.
+    aug_probability: float = Field(0.5, ge=0, le=1)
 
     # --- Вирішувач: добір порогів T і δ за ВАЛІДАЦІЙНОЮ вибіркою ---
     # youden - поріг максимізує J = TPR - FPR для задачі «виявити помилкову класифікацію»;

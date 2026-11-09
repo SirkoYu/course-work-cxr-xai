@@ -47,10 +47,8 @@ def build_augmenter(seed: int = settings.seed) -> keras.Sequential:
     Віддзеркалення не застосовується (анатомічна асиметрія).
 
     Порожні ділянки після повороту/зсуву/масштабу заповнюються відбиттям (reflect), а НЕ
-    чорним кольором: чорні кути з'являлися лише на навчальних зображеннях, а частка чорних
-    країв на знімках різних класів різна. Модель з чорним заповненням на чистих знімках
-    систематично завищувала Tuberculosis і Viral Pneumonia (класи з найменшою часткою
-    чорних країв): accuracy на валідації 0.71 без аугментації проти 0.80 з нею.
+    чорним кольором: чорні кути з'являлися б лише на навчальних зображеннях, а частка
+    чорних країв на знімках різних класів різна. Розмиття від перевибірки див. augment_some.
     """
     return keras.Sequential([
         keras.layers.RandomRotation(settings.aug_rotation, fill_mode="reflect", seed=seed),
@@ -59,6 +57,19 @@ def build_augmenter(seed: int = settings.seed) -> keras.Sequential:
                                        fill_mode="reflect", seed=seed + 2),
         keras.layers.RandomContrast(settings.aug_contrast, seed=seed + 3),
     ], name="augmentation")
+
+
+def augment_some(augmenter: keras.Sequential, x: tf.Tensor, probability: float) -> tf.Tensor:
+    """
+    Аугментує лише частку `probability` зображень батча, решта лишаються без змін.
+    Поворот/масштаб/зсув перевибирають пікселі білінійною інтерполяцією й трохи розмивають
+    знімок. Якщо аугментувати всі зображення, модель бачить лише розмиті знімки, а чіткі
+    (валідація, тест, інтерфейс) сприймає як ознаку найчіткіших класів - Tuberculosis і
+    Viral Pneumonia (accuracy на валідації 0.72 на чітких знімках проти 0.82 на злегка розмитих).
+    """
+    augmented = tf.clip_by_value(augmenter(x, training=True), 0.0, 255.0)
+    mask = tf.random.uniform([tf.shape(x)[0], 1, 1, 1]) < probability
+    return tf.where(mask, augmented, x)
 
 
 def read_split(split_csv: Path, split: str | None = None) -> pd.DataFrame:
@@ -89,7 +100,7 @@ def make_dataset(df: pd.DataFrame, data_root: Path, training: bool,
     ds = ds.batch(batch_size)
     if training:
         augmenter = build_augmenter(seed)
-        ds = ds.map(lambda x, y: (tf.clip_by_value(augmenter(x, training=True), 0.0, 255.0), y),
+        ds = ds.map(lambda x, y: (augment_some(augmenter, x, settings.aug_probability), y),
                     num_parallel_calls=AUTOTUNE)
     return ds.prefetch(AUTOTUNE)
 

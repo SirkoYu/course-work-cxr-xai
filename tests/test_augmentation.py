@@ -16,6 +16,15 @@ def test_color_images_become_grayscale():
     assert np.allclose(out[..., 0], out[..., 1]) and np.allclose(out[..., 1], out[..., 2])
 
 
+def test_augment_some_keeps_part_of_batch_unchanged():
+    rng = np.random.default_rng(0)
+    x = rng.uniform(0, 255, (64, 32, 32, 3)).astype("float32")
+    out = np.asarray(loading.augment_some(loading.build_augmenter(seed=1), x, 0.5))
+    unchanged = np.all(out == x, axis=(1, 2, 3))
+    assert 10 < unchanged.sum() < 54
+    assert np.all(np.asarray(loading.augment_some(loading.build_augmenter(seed=1), x, 0.0)) == x)
+
+
 def test_augmentation_does_not_add_black_fill():
     x = np.full((8, 64, 64, 3), 200.0, dtype="float32")
     out = np.asarray(loading.build_augmenter(seed=1)(x, training=True))
