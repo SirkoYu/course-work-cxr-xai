@@ -25,10 +25,13 @@ AUTOTUNE = tf.data.AUTOTUNE
 def decode_and_resize(raw_bytes, img_size: int = settings.img_size) -> tf.Tensor:
     """
     Байти файлу (PNG/JPEG/BMP) -> тензор (img_size, img_size, 3), float32, 0..255.
-    Градації сірого дублюються в 3 канали (Xception очікує RGB-вхід).
+    Будь-яке зображення спершу зводиться до градацій сірого, які потім дублюються в 3 канали
+    (Xception очікує RGB-вхід). Кольоровими в датасеті є лише частина знімків Tuberculosis
+    і COVID-19, тож відтінок інакше став би «підказкою» класу, а не ознакою хвороби.
     antialias=True зменшує артефакти при сильному зменшенні великих знімків.
     """
     img = tf.io.decode_image(raw_bytes, channels=3, expand_animations=False)
+    img = tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(img))
     img = tf.image.resize(img, (img_size, img_size), method="bilinear", antialias=True)
     return tf.clip_by_value(img, 0.0, 255.0)
 
